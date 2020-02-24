@@ -1,14 +1,15 @@
 #[macro_use]
 extern crate lazy_static;
+extern crate crossbeam_utils;
+use crossbeam_utils as crossbeam;
 use std::option::Option;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 // use rayon_logs as rayon;
 
-const NUM_THREADS: usize = 20;
+const NUM_THREADS: usize = 4;
 lazy_static! {
     static ref V: [AtomicUsize; NUM_THREADS] = Default::default();
-    static ref R: [bool; NUM_THREADS] = Default::default();
 }
 lazy_static! {}
 fn main() -> Result<(), std::io::Error> {
@@ -20,7 +21,18 @@ fn main() -> Result<(), std::io::Error> {
         } // Only steal from 0 currently
 
         V[x].fetch_add(1, Ordering::Relaxed);
-        Some(())
+        let backoff = crossbeam::Backoff::new();
+        let mut c = 0;
+        for _ in 0..8 {
+            // wait until the victim has taken the value, check regularly
+            backoff.spin();
+            c = V[x].load(Ordering::Relaxed);
+            if c == 0 {
+                return Some(());
+            }
+        }
+        V[x].compare_and_swap(c, c - 1, Ordering::Relaxed);
+        None
     };
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
@@ -40,41 +52,43 @@ fn run(mut numbers: &mut [u64]) {
     let thread_index: usize = rayon::current_thread_index().unwrap();
 
     println!("I am {}", thread_index);
-    rayon::scope(|s| {
-        loop {
-            // check how many other threads need work
-            let steal_counter: usize = V[thread_index].swap(0, Ordering::Relaxed);
-            if steal_counter > 0 {
-                let len = numbers.len();
-                if len < 10 {
-                    // Why don't we need to send message to all others to abort?
-                    /*
-                    (0..steal_counter)
-                        .into_iter()
-                        .for_each(|_| s.spawn_for(|_| {}));
-                    */
-                    // finish work and return
-                    do_the_work(&mut numbers);
-                    break;
-                } else {
-                    let mut chunks = numbers.chunks_mut((numbers.len() / steal_counter) + 1);
-                    numbers = chunks.next().unwrap();
-                    chunks.for_each(|chunk| {
-                        s.spawn_for(move |_| {
-                            let idx: usize = rayon::current_thread_index().unwrap();
-                            println!("{}, I'm calculating {} elements", idx, chunk.len());
-                            // run(chunk) // deadlocking currently
-                            do_the_work(&mut *chunk);
-                        });
-                    });
-                }
+    loop {
+        // check how many other threads need work
+        let steal_counter: usize = V[thread_index].swap(0, Ordering::Relaxed);
+        if steal_counter > 0 {
+            let len = numbers.len();
+            if len < 100 {
+                // finish work and return
+                do_the_work(&mut numbers);
+                break;
+            } else {
+                let numbers_len = numbers.len();
+                let mut chunks = numbers.chunks_mut(numbers_len / (steal_counter + 1/* for me */));
+                println!(
+                    "{}: {} steals, total {}",
+                    thread_index, steal_counter, numbers_len
+                );
+                numbers = chunks.next().unwrap();
+                fn spawn(chunks: &mut std::slice::ChunksMut<u64>) -> Option<()> {
+                    let chunk = chunks.next()?;
+                    rayon::join(
+                        || {
+                            spawn(chunks);
+                        },
+                        || {
+                            do_the_work(chunk);
+                        },
+                    );
+                    None
+                };
+                spawn(&mut chunks);
             }
-            // do *some* work, here: 10 elements
-            let (left, right) = numbers.split_at_mut(std::cmp::min(numbers.len(), 10));
-            do_the_work(left);
-            numbers = right;
         }
-    });
+        // do *some* work, here: 10 elements
+        let (left, right) = numbers.split_at_mut(std::cmp::min(numbers.len(), 100));
+        do_the_work(left);
+        numbers = right;
+    }
 }
 
 fn do_the_work(data: &mut [u64]) {

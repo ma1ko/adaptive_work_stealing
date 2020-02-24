@@ -8,4 +8,6 @@ edition = "2018"
 
 [dependencies]
 rayon = {path = "../rayon"}
+# rayon_logs = {path = "../rayon-logs"}
 lazy_static = "*"
+crossbeam-utils = "*"
