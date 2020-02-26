@@ -20,9 +20,8 @@ lazy_static! {
 
 const WORK_SIZE: usize = 100_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [0, 2, 4, 6, 8].iter() {
+    for size in [0, 2, 4, 6, 8, 10, 12,].iter() {
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
-            //group.bench_function("adaptive", |b| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
                 .steal_callback(move |x| steal(*size, x))
@@ -109,10 +108,11 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Work-Stealing");
     group.measurement_time(std::time::Duration::new(5, 0));
 
+    /*
     group.bench_function("single", |mut b: &mut Bencher| {
         single(&mut b);
     });
-
+*/
     group.bench_function("iterator", |mut b: &mut Bencher| {
         iterator(&mut b);
     });
