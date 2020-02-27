@@ -6,9 +6,9 @@ use rayon::prelude::*;
 #[macro_use]
 extern crate lazy_static;
 lazy_static! {
-    static ref numbers: Vec<usize> = (0..WORK_SIZE).into_iter().collect();
+    static ref NUMBERS: Vec<usize> = (0..WORK_SIZE).into_iter().collect();
     #[derive(Debug, Eq, PartialEq, Clone )]
-    static ref VERIFY: Vec<usize> = numbers
+    static ref VERIFY: Vec<usize> = NUMBERS 
         .clone()
         .iter_mut()
         .map(|x: &mut usize| {
@@ -20,7 +20,7 @@ lazy_static! {
 
 const WORK_SIZE: usize = 100_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [0, 2, 4, 6, 8, 10, 12,].iter() {
+    for size in [0, 2, 4, 6, 8, 10 ].iter() {
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
@@ -29,13 +29,13 @@ pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
                 .unwrap();
 
             b.iter_batched(
-                || numbers.clone(),
-                |mut n| {
+                || NUMBERS.clone(),
+                |mut numbers| {
                     pool.install(|| {
-                        run(black_box(&mut n));
+                        run(black_box(&mut numbers));
                     });
-                    assert_eq!(n, *VERIFY, "wrong output");
-                    n
+                    assert_eq!(numbers, *VERIFY, "wrong output");
+                    numbers
                 },
                 BatchSize::SmallInput,
             );
@@ -50,28 +50,28 @@ pub fn iterator(b: &mut Bencher) {
         .unwrap();
 
     b.iter_batched(
-        || numbers.clone(),
-        |mut n| {
+        || NUMBERS.clone(),
+        |mut numbers| {
             pool.install(|| {
-                black_box(&mut n)
+                black_box(&mut numbers)
                     .par_iter_mut()
                     .for_each(|x: &mut usize| work(&mut *x));
             });
-            assert_eq!(n, *VERIFY, "wrong output");
-            n
+            assert_eq!(numbers, *VERIFY, "wrong output");
+            numbers
         },
         BatchSize::SmallInput,
     );
 }
 pub fn single(b: &mut Bencher) {
     b.iter_batched(
-        || numbers.clone(),
-        |mut n| {
-            black_box(&mut n)
+        || NUMBERS.clone(),
+        |mut numbers| {
+            black_box(&mut numbers)
                 .iter_mut()
                 .for_each(|x: &mut usize| work(&mut *x));
-            assert_eq!(n, *VERIFY, "wrong output");
-            n
+            assert_eq!(numbers, *VERIFY, "wrong output");
+            numbers
         },
         BatchSize::SmallInput,
     );
@@ -84,9 +84,9 @@ pub fn perfect_split(b: &mut Bencher) {
         .unwrap();
     pool.install(|| {
         b.iter_batched(
-            || numbers.clone(),
-            |mut n| {
-                let (left, right) = black_box(&mut n).split_at_mut(WORK_SIZE / 2);
+            || NUMBERS.clone(),
+            |mut numbers| {
+                let (left, right) = black_box(&mut numbers).split_at_mut(WORK_SIZE / 2);
                 rayon::join(
                     || {
                         let (mut left, mut right) = left.split_at_mut(WORK_SIZE / 4);
@@ -97,8 +97,8 @@ pub fn perfect_split(b: &mut Bencher) {
                         rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
                     },
                 );
-                assert_eq!(n, *VERIFY, "wrong output");
-                n
+                assert_eq!(numbers, *VERIFY, "wrong output");
+                numbers
             },
             BatchSize::SmallInput,
         );

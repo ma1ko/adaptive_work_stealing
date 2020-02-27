@@ -13,6 +13,7 @@ lazy_static! {
     // static ref V: [AtomicUsize; NUM_THREADS] = Default::default();
 }
 pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
+    //rayon_logs::subgraph("WAITING", backoffs, move || {
     let thread_index = rayon::current_thread_index().unwrap();
     //V[victim].fetch_add(1, Ordering::Relaxed);
     V[victim].fetch_or(1 << thread_index, Ordering::Relaxed);
@@ -28,11 +29,13 @@ pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
         }
     }
     // let _ = V[victim].compare_exchange_weak(c, c - 1, Ordering::Relaxed, Ordering::Relaxed);
-
+    //   None
+    //});
     None
 }
+const N: usize = 500000;
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut numbers: Vec<usize> = (0..50000).collect();
+    let mut numbers: Vec<usize> = (0..N).collect();
     let mut verify: Vec<usize> = numbers.clone();
     do_the_work(&mut verify);
     let pool = rayon::ThreadPoolBuilder::new()
@@ -40,19 +43,17 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .steal_callback(|x| steal(5, x))
         .build()?;
     let (_, log) = pool.logging_install(|| {
-        //pool.install(|| {
         run(&mut numbers);
     });
 
     log.save_svg("test.svg").expect("failed saving svg");
+    log.save("test").expect("failed saving log");
     assert_eq!(numbers, verify, "wrong output");
     Ok(())
 }
-const MIN_WORK_SIZE: usize = 10;
+const MIN_WORK_SIZE: usize = 100;
 pub fn run(mut numbers: &mut [usize]) {
     let mut work_size = MIN_WORK_SIZE;
-    // local copy
-
     while !numbers.is_empty() {
         let len = numbers.len();
         // check how many other threads need work
@@ -62,21 +63,21 @@ pub fn run(mut numbers: &mut [usize]) {
         if steal_counter > 0 && len >= MIN_WORK_SIZE {
             // If there's more steals than threads, just create tasks for all *other* threads
             steal_counter = std::cmp::min(steal_counter, NUM_THREADS - 1);
-            let mut chunks =
-                numbers.chunks_mut(len / (steal_counter + 1/* for me */) + 1 /*round up */);
-            numbers = chunks.next().unwrap();
-            fn spawn(chunks: &mut std::slice::ChunksMut<usize>, mut numbers: &mut [usize]) {
-                let chunk = chunks.next();
-                match chunk {
+            let mut chunks = numbers
+                .chunks_mut(len / (steal_counter + 1/* for me */) + 1 /*round up */)
+                .peekable();
+            fn spawn(chunks: &mut std::iter::Peekable<std::slice::ChunksMut<usize>>) {
+                let chunk = chunks.next().unwrap();
+                match chunks.peek() {
                     None => {
                         // finished recursion, let's do our part of the data
-                        run(numbers);
+                        run(chunk);
                     }
-                    Some(chunk) => {
+                    Some(_) => {
                         rayon::join(
                             || {
                                 // prepare another task for the next stealer
-                                spawn(chunks, &mut numbers);
+                                spawn(chunks);
                             },
                             || {
                                 // let the stealer process it's part
@@ -86,15 +87,18 @@ pub fn run(mut numbers: &mut [usize]) {
                     }
                 }
             }
-            spawn(&mut chunks, &mut numbers);
-            // work_size = MIN_WORK_SIZE;
+            spawn(&mut chunks);
             break; // we are finished processing, return the recursion
         } else {
-            // do *some* work, here: 100 elements
+            // do *some* work, here: we start with work_size and double every round
             let (left, right) = numbers.split_at_mut(std::cmp::min(numbers.len(), work_size));
-            // work_size *= 2; // Nobody stole, so we might do more work next time
-
-            do_the_work(left);
+            rayon_logs::subgraph("Work", work_size, || {
+                do_the_work(left);
+            });
+            // Nobody stole, so we might do more work next time
+            // maximim is either everything that's left or sqrt(N), so we don't let other threads
+            // wait too long
+            work_size = std::cmp::min(work_size * 2, (N as f64).sqrt() as usize);
             numbers = right;
         }
     }
