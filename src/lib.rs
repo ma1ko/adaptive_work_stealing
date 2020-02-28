@@ -15,32 +15,40 @@ lazy_static! {
 pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
     //rayon_logs::subgraph("WAITING", backoffs, move || {
     let thread_index = rayon::current_thread_index().unwrap();
-    //V[victim].fetch_add(1, Ordering::Relaxed);
-    V[victim].fetch_or(1 << thread_index, Ordering::Relaxed);
+    let thread_index = 1 << thread_index;
+    V[victim].fetch_or(thread_index, Ordering::Relaxed);
 
     let backoff = crossbeam::Backoff::new();
     let mut c: usize = 0;
     for _ in 0..backoffs {
-        // wait until the victim has taken the value, check regularly
         backoff.snooze(); // or spin()?
+
+        // wait until the victim has taken the value, check regularly
         c = V[victim].load(Ordering::Relaxed);
-        if c == 0 {
+        if c & thread_index == 0 {
             return Some(());
         }
     }
-    // let _ = V[victim].compare_exchange_weak(c, c - 1, Ordering::Relaxed, Ordering::Relaxed);
-    //   None
-    //});
+
+    /*
+    let _ = V[victim].compare_exchange_weak(
+        c,
+        c & !(thread_index),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    */
+
     None
 }
-const N: usize = 500000;
+const N: usize = 500_000;
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut numbers: Vec<usize> = (0..N).collect();
     let mut verify: Vec<usize> = numbers.clone();
     do_the_work(&mut verify);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
-        .steal_callback(|x| steal(5, x))
+        .steal_callback(|x| steal(4, x))
         .build()?;
     let (_, log) = pool.logging_install(|| {
         run(&mut numbers);
@@ -51,18 +59,18 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(numbers, verify, "wrong output");
     Ok(())
 }
-const MIN_WORK_SIZE: usize = 100;
+const MIN_WORK_SIZE: usize = 10;
 pub fn run(mut numbers: &mut [usize]) {
     let mut work_size = MIN_WORK_SIZE;
     while !numbers.is_empty() {
         let len = numbers.len();
         // check how many other threads need work
         let thread_index = rayon::current_thread_index().unwrap();
-        let steal_counter = V[thread_index].swap(0, Ordering::Relaxed);
-        let mut steal_counter: usize = steal_counter.count_ones() as usize;
+        let steal_counter = V[thread_index].swap(0, Ordering::SeqCst);
+        let steal_counter = steal_counter.count_ones() as usize;
         if steal_counter > 0 && len >= MIN_WORK_SIZE {
             // If there's more steals than threads, just create tasks for all *other* threads
-            steal_counter = std::cmp::min(steal_counter, NUM_THREADS - 1);
+            let steal_counter = std::cmp::min(steal_counter, NUM_THREADS - 1);
             let mut chunks = numbers
                 .chunks_mut(len / (steal_counter + 1/* for me */) + 1 /*round up */)
                 .peekable();

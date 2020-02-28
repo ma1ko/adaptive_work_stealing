@@ -18,9 +18,9 @@ lazy_static! {
         .collect();
 }
 
-const WORK_SIZE: usize = 100_000;
+const WORK_SIZE: usize = 10_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [0, 2, 4, 6, 8, 10 ].iter() {
+    for size in [1, 2, 4, 6, 8, 10, 12, 14, 16 ].iter() {
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
@@ -106,13 +106,16 @@ pub fn perfect_split(b: &mut Bencher) {
 }
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Work-Stealing");
-    group.measurement_time(std::time::Duration::new(5, 0));
+    group.measurement_time(std::time::Duration::new(3, 0));
+    group.warm_up_time(std::time::Duration::new(1, 0));
 
     /*
     group.bench_function("single", |mut b: &mut Bencher| {
         single(&mut b);
     });
 */
+
+    adaptive(&mut group);
     group.bench_function("iterator", |mut b: &mut Bencher| {
         iterator(&mut b);
     });
@@ -120,8 +123,6 @@ fn bench(c: &mut Criterion) {
     group.bench_function("perfect split", |b| {
         perfect_split(b);
     });
-    adaptive(&mut group);
-
     group.finish();
 }
 criterion_group!(benches, bench);
