@@ -3,14 +3,14 @@ extern crate lazy_static;
 extern crate crossbeam_utils;
 use crossbeam::CachePadded;
 use crossbeam_utils as crossbeam;
-// use rayon_logs as rayon;
-use rayon::prelude::*;
+use rayon_logs as rayon;
 use std::option::Option;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const NUM_THREADS: usize = 4;
+pub const NUM_THREADS: usize = 3;
 lazy_static! {
     static ref V: [CachePadded<AtomicUsize>; NUM_THREADS] = Default::default();
+    static ref WORK: Vec<usize> = (0..N).map(|x| is_prime_work(x)).collect();
     // static ref V: [AtomicUsize; NUM_THREADS] = Default::default();
 }
 pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
@@ -31,7 +31,7 @@ pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
         }
     }
 
-    //V[victim].fetch_and(!thread_index, Ordering::Relaxed);
+    V[victim].fetch_and(!thread_index, Ordering::Relaxed);
     /*
      let _ = V[victim].compare_exchange_weak(
          c,
@@ -48,18 +48,19 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let numbers: Vec<usize> = (0..N).collect();
     let mut verify: Vec<usize> = do_the_work(&numbers);
     do_the_work(&mut verify);
+    println!("{}", WORK[0]); // we need to access WORK so that it get's initialized before the measurements start
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
-        .steal_callback(|x| steal(4, x))
+        .steal_callback(|x| steal(40, x))
         .build()?;
-    //let (_, log) = pool.logging_install(|| {
-    pool.install(|| {
+    let (_, log) = pool.logging_install(|| {
+        //pool.install(|| {
         let results = run(&numbers);
         assert_eq!(*results, verify, "wrong output");
     });
     //});
 
-    //log.save_svg("test.svg").expect("failed saving svg");
+    log.save_svg("test.svg").expect("failed saving svg");
     //log.save("test").expect("failed saving log");
     Ok(())
 }
@@ -113,10 +114,17 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
         } else {
             // do *some* work, here: we start with work_size and double every round
             let (left, right) = numbers.split_at(std::cmp::min(numbers.len(), work_size));
-            //rayon_logs::subgraph("Work", work_size, || {
-            let mut res = do_the_work(left);
-            filtered.append(&mut res);
-            //});
+
+            let amount_of_work = |slice: &[usize]| slice.iter().map(|x| WORK[*x]).sum();
+            rayon_logs::custom_subgraph(
+                "Work",
+                || {},
+                |()| amount_of_work(left),
+                || {
+                    let mut res = do_the_work(left);
+                    filtered.append(&mut res);
+                },
+            );
             // Nobody stole, so we might do more work next time
             // maximim is either everything that's left or sqrt(N), so we don't let other threads
             // wait too long
@@ -157,10 +165,20 @@ pub fn work(x: usize) -> bool {
 fn is_prime(n: usize) -> bool {
     for a in 2..(n as f64).sqrt() as usize {
         if n % a == 0 {
-            return false; // if it is not the last statement you need to use `return`
+            return false;
         }
     }
-    true // last value to return
+    true
+}
+// return how many operations it takes to find out if n is prime
+fn is_prime_work(n: usize) -> usize {
+    let sqrt_n = (n as f64).sqrt() as usize;
+    for a in 2..sqrt_n {
+        if n % a == 0 {
+            return a;
+        }
+    }
+    return sqrt_n;
 }
 
 pub fn do_the_work(data: &[usize]) -> Vec<usize> {

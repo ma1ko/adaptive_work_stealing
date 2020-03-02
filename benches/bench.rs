@@ -9,20 +9,12 @@ lazy_static! {
     static ref NUMBERS: Vec<usize> = (0..WORK_SIZE).into_iter().collect();
     #[derive(Debug, Eq, PartialEq, Clone )]
     static ref VERIFY: Vec<usize> = do_the_work(&NUMBERS);
-        /*
-        .clone()
-        .iter_mut()
-        .map(|x: &mut usize| {
-            work(&mut *x);
-            *x
-        })
-        .collect();
-        */
+
 }
 
 const WORK_SIZE: usize = 20_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [1, 2, 4, 6, 8, 10, 12, 14, 16].iter() {
+    for size in [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34].iter() {
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
