@@ -8,7 +8,8 @@ extern crate lazy_static;
 lazy_static! {
     static ref NUMBERS: Vec<usize> = (0..WORK_SIZE).into_iter().collect();
     #[derive(Debug, Eq, PartialEq, Clone )]
-    static ref VERIFY: Vec<usize> = NUMBERS 
+    static ref VERIFY: Vec<usize> = do_the_work(&NUMBERS);
+        /*
         .clone()
         .iter_mut()
         .map(|x: &mut usize| {
@@ -16,11 +17,12 @@ lazy_static! {
             *x
         })
         .collect();
+        */
 }
 
-const WORK_SIZE: usize = 10_000;
+const WORK_SIZE: usize = 20_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [1, 2, 4, 6, 8, 10, 12, 14, 16 ].iter() {
+    for size in [1, 2, 4, 6, 8, 10, 12, 14, 16].iter() {
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
@@ -32,9 +34,9 @@ pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
                 || NUMBERS.clone(),
                 |mut numbers| {
                     pool.install(|| {
-                        run(black_box(&mut numbers));
+                        let numbers = run(black_box(&mut numbers));
+                        assert_eq!(*numbers, *VERIFY, "wrong output");
                     });
-                    assert_eq!(numbers, *VERIFY, "wrong output");
                     numbers
                 },
                 BatchSize::SmallInput,
@@ -51,13 +53,12 @@ pub fn iterator(b: &mut Bencher) {
 
     b.iter_batched(
         || NUMBERS.clone(),
-        |mut numbers| {
+        |numbers| {
             pool.install(|| {
-                black_box(&mut numbers)
-                    .par_iter_mut()
-                    .for_each(|x: &mut usize| work(&mut *x));
+                let numbers: Vec<usize> =
+                    numbers.par_iter().filter(|x| work(**x)).cloned().collect();
+                assert_eq!(numbers, *VERIFY, "wrong output");
             });
-            assert_eq!(numbers, *VERIFY, "wrong output");
             numbers
         },
         BatchSize::SmallInput,
@@ -66,10 +67,8 @@ pub fn iterator(b: &mut Bencher) {
 pub fn single(b: &mut Bencher) {
     b.iter_batched(
         || NUMBERS.clone(),
-        |mut numbers| {
-            black_box(&mut numbers)
-                .iter_mut()
-                .for_each(|x: &mut usize| work(&mut *x));
+        |numbers| {
+            let numbers = do_the_work(&numbers);
             assert_eq!(numbers, *VERIFY, "wrong output");
             numbers
         },
@@ -85,20 +84,28 @@ pub fn perfect_split(b: &mut Bencher) {
     pool.install(|| {
         b.iter_batched(
             || NUMBERS.clone(),
-            |mut numbers| {
-                let (left, right) = black_box(&mut numbers).split_at_mut(WORK_SIZE / 2);
-                rayon::join(
+            |numbers| {
+                let (left, right) = black_box(&numbers).split_at(WORK_SIZE / 2);
+                let (mut left, mut right) = rayon::join(
                     || {
-                        let (mut left, mut right) = left.split_at_mut(WORK_SIZE / 4);
-                        rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
+                        let (mut left, mut right) = left.split_at(WORK_SIZE / 4);
+                        let (mut left, mut right) =
+                            rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
+                        left.append(&mut right);
+                        left
                     },
                     || {
-                        let (mut left, mut right) = right.split_at_mut(WORK_SIZE / 4);
-                        rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
+                        let (mut left, mut right) = right.split_at(WORK_SIZE / 4);
+                        let (mut left, mut right) =
+                            rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
+                        left.append(&mut right);
+                        left
                     },
                 );
-                assert_eq!(numbers, *VERIFY, "wrong output");
-                numbers
+                left.append(&mut right);
+
+                assert_eq!(left, *VERIFY, "wrong output");
+                left
             },
             BatchSize::SmallInput,
         );
@@ -113,9 +120,7 @@ fn bench(c: &mut Criterion) {
     group.bench_function("single", |mut b: &mut Bencher| {
         single(&mut b);
     });
-*/
-
-    adaptive(&mut group);
+    */
     group.bench_function("iterator", |mut b: &mut Bencher| {
         iterator(&mut b);
     });
@@ -123,6 +128,9 @@ fn bench(c: &mut Criterion) {
     group.bench_function("perfect split", |b| {
         perfect_split(b);
     });
+
+    adaptive(&mut group);
+
     group.finish();
 }
 criterion_group!(benches, bench);

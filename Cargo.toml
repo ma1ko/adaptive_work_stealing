@@ -17,3 +17,4 @@ rand = "*"
 [[bench]]
 name = "bench"
 harness = false
+
