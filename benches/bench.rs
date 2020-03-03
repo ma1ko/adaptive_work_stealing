@@ -12,9 +12,9 @@ lazy_static! {
 
 }
 
-const WORK_SIZE: usize = 20_000;
+const WORK_SIZE: usize = 10_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34].iter() {
+    for size in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50].iter() {
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(NUM_THREADS)
@@ -22,17 +22,13 @@ pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
                 .build()
                 .unwrap();
 
-            b.iter_batched(
-                || NUMBERS.clone(),
-                |mut numbers| {
-                    pool.install(|| {
-                        let numbers = run(black_box(&mut numbers));
-                        assert_eq!(*numbers, *VERIFY, "wrong output");
-                    });
+            b.iter(|| {
+                pool.install(|| {
+                    let numbers = run(black_box(&NUMBERS));
+                    assert_eq!(*numbers, *VERIFY, "wrong output");
                     numbers
-                },
-                BatchSize::SmallInput,
-            );
+                })
+            });
         });
     }
 }
@@ -43,29 +39,20 @@ pub fn iterator(b: &mut Bencher) {
         .build()
         .unwrap();
 
-    b.iter_batched(
-        || NUMBERS.clone(),
-        |numbers| {
-            pool.install(|| {
-                let numbers: Vec<usize> =
-                    numbers.par_iter().filter(|x| work(**x)).cloned().collect();
-                assert_eq!(numbers, *VERIFY, "wrong output");
-            });
-            numbers
-        },
-        BatchSize::SmallInput,
-    );
-}
-pub fn single(b: &mut Bencher) {
-    b.iter_batched(
-        || NUMBERS.clone(),
-        |numbers| {
-            let numbers = do_the_work(&numbers);
+    b.iter(|| {
+        pool.install(|| {
+            let numbers: Vec<usize> = NUMBERS.par_iter().filter(|x| work(**x)).cloned().collect();
             assert_eq!(numbers, *VERIFY, "wrong output");
             numbers
-        },
-        BatchSize::SmallInput,
-    );
+        });
+    });
+}
+pub fn single(b: &mut Bencher) {
+    b.iter(|| {
+        let numbers = do_the_work(black_box(&NUMBERS));
+        assert_eq!(numbers, *VERIFY, "wrong output");
+        numbers
+    });
 }
 
 pub fn perfect_split(b: &mut Bencher) {
@@ -74,39 +61,36 @@ pub fn perfect_split(b: &mut Bencher) {
         .build()
         .unwrap();
     pool.install(|| {
-        b.iter_batched(
-            || NUMBERS.clone(),
-            |numbers| {
-                let (left, right) = black_box(&numbers).split_at(WORK_SIZE / 2);
-                let (mut left, mut right) = rayon::join(
-                    || {
-                        let (mut left, mut right) = left.split_at(WORK_SIZE / 4);
-                        let (mut left, mut right) =
-                            rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
-                        left.append(&mut right);
-                        left
-                    },
-                    || {
-                        let (mut left, mut right) = right.split_at(WORK_SIZE / 4);
-                        let (mut left, mut right) =
-                            rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
-                        left.append(&mut right);
-                        left
-                    },
-                );
-                left.append(&mut right);
+        b.iter(|| {
+            let (left, right) = black_box(&NUMBERS).split_at(WORK_SIZE / 2);
+            let (mut left, mut right) = rayon::join(
+                || {
+                    let (mut left, mut right) = left.split_at(WORK_SIZE / 4);
+                    let (mut left, mut right) =
+                        rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
+                    left.append(&mut right);
+                    left
+                },
+                || {
+                    let (mut left, mut right) = right.split_at(WORK_SIZE / 4);
+                    let (mut left, mut right) =
+                        rayon::join(|| do_the_work(&mut left), || do_the_work(&mut right));
+                    left.append(&mut right);
+                    left
+                },
+            );
+            left.append(&mut right);
 
-                assert_eq!(left, *VERIFY, "wrong output");
-                left
-            },
-            BatchSize::SmallInput,
-        );
+            assert_eq!(left, *VERIFY, "wrong output");
+            left
+        });
     });
 }
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Work-Stealing");
     group.measurement_time(std::time::Duration::new(3, 0));
     group.warm_up_time(std::time::Duration::new(1, 0));
+    group.sample_size(10);
 
     /*
     group.bench_function("single", |mut b: &mut Bencher| {

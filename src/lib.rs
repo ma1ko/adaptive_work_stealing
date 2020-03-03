@@ -5,7 +5,7 @@ use crossbeam::CachePadded;
 use crossbeam_utils as crossbeam;
 use rayon_logs as rayon;
 use std::option::Option;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub const NUM_THREADS: usize = 3;
 lazy_static! {
@@ -18,47 +18,42 @@ pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
     let thread_index = rayon::current_thread_index().unwrap();
     let thread_index = 1 << thread_index;
     V[victim].fetch_or(thread_index, Ordering::Relaxed);
+    //V[victim].fetch_add(1, Ordering::Relaxed);
 
     let backoff = crossbeam::Backoff::new();
     let mut c: usize = 0;
     for _ in 0..backoffs {
-        backoff.snooze(); // or spin()?
+        backoff.spin(); // spin or snooze()?
 
         // wait until the victim has taken the value, check regularly
         c = V[victim].load(Ordering::Relaxed);
-        if c & thread_index == 0 {
+        if c == 0 {
             return Some(());
         }
     }
 
     V[victim].fetch_and(!thread_index, Ordering::Relaxed);
-    /*
-     let _ = V[victim].compare_exchange_weak(
-         c,
-         c & !(thread_index),
-         Ordering::Relaxed,
-         Ordering::Relaxed,
-     );
-    */
+    //let i = V[victim].fetch_sub(1, Ordering::Relaxed);
+    //assert!(i != 0,"we just underflowed");
+
+    //let _ = V[victim].compare_exchange_weak(c, c - 1, Ordering::Relaxed, Ordering::Relaxed);
 
     None
 }
-const N: usize = 20_000;
+const N: usize = 10_000;
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let numbers: Vec<usize> = (0..N).collect();
-    let mut verify: Vec<usize> = do_the_work(&numbers);
-    do_the_work(&mut verify);
+    let verify: Vec<usize> = do_the_work(&numbers);
     println!("{}", WORK[0]); // we need to access WORK so that it get's initialized before the measurements start
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
-        .steal_callback(|x| steal(40, x))
+        .steal_callback(|x| steal(10, x))
         .build()?;
     let (_, log) = pool.logging_install(|| {
-        //pool.install(|| {
+        // pool.install(|| {
         let results = run(&numbers);
         assert_eq!(*results, verify, "wrong output");
     });
-    //});
 
     log.save_svg("test.svg").expect("failed saving svg");
     //log.save("test").expect("failed saving log");
@@ -68,11 +63,11 @@ const MIN_WORK_SIZE: usize = 10;
 pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
     let mut filtered: Box<Vec<usize>> = Box::new(Vec::new());
     let mut work_size = MIN_WORK_SIZE;
+    let thread_index = rayon::current_thread_index().unwrap();
     while !numbers.is_empty() {
         let len = numbers.len();
         // check how many other threads need work
-        let thread_index = rayon::current_thread_index().unwrap();
-        let steal_counter = V[thread_index].swap(0, Ordering::SeqCst);
+        let steal_counter = V[thread_index].swap(0, Ordering::Relaxed);
         let steal_counter = steal_counter.count_ones() as usize;
         if steal_counter > 0 && len >= MIN_WORK_SIZE {
             // If there's more steals than threads, just create tasks for all *other* threads
@@ -125,6 +120,7 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
                     filtered.append(&mut res);
                 },
             );
+
             // Nobody stole, so we might do more work next time
             // maximim is either everything that's left or sqrt(N), so we don't let other threads
             // wait too long
