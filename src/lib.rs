@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub const NUM_THREADS: usize = 4;
 lazy_static! {
-    static ref V: [CachePadded<AtomicUsize>; NUM_THREADS] = Default::default();
+    static ref V: Vec<CachePadded<AtomicUsize>> = (0..NUM_THREADS)
+        .map(|_| CachePadded::new(AtomicUsize::new(0)))
+        .collect();
     static ref WORK: Vec<usize> = (0..N).map(|x| is_prime_work(x)).collect();
 }
 pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
@@ -41,25 +43,25 @@ pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
 const N: usize = 500_000;
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let numbers: Vec<usize> = (0..N).collect();
-    let verify: Vec<usize> = do_the_work(&numbers);
+    // let verify: Vec<usize> = do_the_work(&numbers); // takes too long
     println!("{}", WORK[0]); // we need to access WORK so that it get's initialized before the measurements start
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
         .steal_callback(|x| steal(20, x))
         .build()?;
-    let (_, log) = pool.logging_install(|| {
-        // pool.install(|| {
-        let results = run(&numbers);
-        assert_eq!(*results, verify, "wrong output");
+    let (results, log) = pool.logging_install(|| {
+        // let results = pool.install(|| {
+        run(&numbers)
     });
+    println!("{}", (results).into_iter().sum::<usize>());
 
     log.save_svg("test.svg").expect("failed saving svg");
     //log.save("test").expect("failed saving log");
     Ok(())
 }
 const MIN_WORK_SIZE: usize = 10;
-pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
-    let mut filtered: Box<Vec<usize>> = Box::new(Vec::new());
+pub fn run(mut numbers: &[usize]) -> Vec<&usize> {
+    let mut filtered: Vec<&usize> = Vec::new();
     let mut work_size = MIN_WORK_SIZE;
     let thread_index = rayon::current_thread_index().unwrap();
     while !numbers.is_empty() {
@@ -76,7 +78,7 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
                 .peekable();
             fn spawn(
                 mut chunks: std::iter::Peekable<std::iter::Rev<std::slice::Chunks<usize>>>,
-            ) -> Box<Vec<usize>> {
+            ) -> Vec<&usize> {
                 let chunk = chunks.next().unwrap();
                 match chunks.peek() {
                     None => {
@@ -101,7 +103,7 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
                     }
                 }
             }
-            let mut res: Box<Vec<usize>> = spawn(chunks);
+            let mut res: Vec<&usize> = spawn(chunks);
             filtered.append(&mut res);
             return filtered;
         // break; // we are finished processing, return the recursion
@@ -109,21 +111,25 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
             // do *some* work, here: we start with work_size and double every round
             let (left, right) = numbers.split_at(std::cmp::min(numbers.len(), work_size));
 
+            /*
             let amount_of_work = |slice: &[usize]| slice.iter().map(|x| WORK[*x]).sum();
             rayon_logs::custom_subgraph(
                 "Work",
                 || {},
                 |()| amount_of_work(left),
                 || {
+            */
                     let mut res = do_the_work(left);
                     filtered.append(&mut res);
+                   /* 
                 },
             );
+                   */
 
             // Nobody stole, so we might do more work next time
             // maximim is either everything that's left or sqrt(N), so we don't let other threads
             // wait too long
-            work_size = std::cmp::min(work_size * 2, (N as f64).sqrt() as usize);
+            work_size = std::cmp::min(work_size * 2, 100);
             numbers = right;
         }
     }
@@ -176,6 +182,6 @@ fn is_prime_work(n: usize) -> usize {
     return sqrt_n;
 }
 
-pub fn do_the_work(data: &[usize]) -> Vec<usize> {
-    data.iter().filter(|x| work(**x)).cloned().collect()
+pub fn do_the_work(data: &[usize]) -> Vec<&usize> {
+    data.iter().filter(|x| work(**x)).collect()
 }
