@@ -4,17 +4,16 @@ extern crate crossbeam_utils;
 use crossbeam::CachePadded;
 use crossbeam_utils as crossbeam;
 use rayon_logs as rayon;
+use rayon_logs::*;
 use std::option::Option;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const NUM_THREADS: usize = 3;
+pub const NUM_THREADS: usize = 4;
 lazy_static! {
     static ref V: [CachePadded<AtomicUsize>; NUM_THREADS] = Default::default();
     static ref WORK: Vec<usize> = (0..N).map(|x| is_prime_work(x)).collect();
-    // static ref V: [AtomicUsize; NUM_THREADS] = Default::default();
 }
 pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
-    //rayon_logs::subgraph("WAITING", backoffs, move || {
     let thread_index = rayon::current_thread_index().unwrap();
     let thread_index = 1 << thread_index;
     V[victim].fetch_or(thread_index, Ordering::Relaxed);
@@ -34,20 +33,19 @@ pub fn steal(backoffs: usize, victim: usize) -> Option<()> {
 
     V[victim].fetch_and(!thread_index, Ordering::Relaxed);
     //let i = V[victim].fetch_sub(1, Ordering::Relaxed);
-    //assert!(i != 0,"we just underflowed");
 
     //let _ = V[victim].compare_exchange_weak(c, c - 1, Ordering::Relaxed, Ordering::Relaxed);
 
     None
 }
-const N: usize = 10_000;
+const N: usize = 500_000;
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let numbers: Vec<usize> = (0..N).collect();
     let verify: Vec<usize> = do_the_work(&numbers);
     println!("{}", WORK[0]); // we need to access WORK so that it get's initialized before the measurements start
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
-        .steal_callback(|x| steal(10, x))
+        .steal_callback(|x| steal(20, x))
         .build()?;
     let (_, log) = pool.logging_install(|| {
         // pool.install(|| {
@@ -74,9 +72,10 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
             let steal_counter = std::cmp::min(steal_counter, NUM_THREADS - 1);
             let chunks = numbers
                 .chunks(len / (steal_counter + 1/* for me */) + 1 /*round up */)
+                .rev()
                 .peekable();
             fn spawn(
-                mut chunks: std::iter::Peekable<std::slice::Chunks<usize>>,
+                mut chunks: std::iter::Peekable<std::iter::Rev<std::slice::Chunks<usize>>>,
             ) -> Box<Vec<usize>> {
                 let chunk = chunks.next().unwrap();
                 match chunks.peek() {
@@ -96,9 +95,9 @@ pub fn run(mut numbers: &[usize]) -> Box<Vec<usize>> {
                             },
                         );
                         //   rayon_logs::subgraph("merge", left.len(), || {
-                        right.append(&mut left);
+                        left.append(&mut right);
                         //   });
-                        right
+                        left
                     }
                 }
             }
