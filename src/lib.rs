@@ -47,7 +47,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", WORK[0]); // we need to access WORK so that it get's initialized before the measurements start
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(NUM_THREADS)
-        .steal_callback(|x| steal(20, x))
+        .steal_callback(|x| steal(8, x))
         .build()?;
     let (results, log) = pool.logging_install(|| {
         // let results = pool.install(|| {
@@ -86,7 +86,7 @@ pub fn run(mut numbers: &[usize]) -> Vec<&usize> {
                         return run(chunk);
                     }
                     Some(_) => {
-                        let (mut left, mut right) = rayon::join(
+                        let (mut left, mut right) = rayon_logs::join(
                             || {
                                 // prepare another task for the next stealer
                                 spawn(chunks)
@@ -119,9 +119,9 @@ pub fn run(mut numbers: &[usize]) -> Vec<&usize> {
                 |()| amount_of_work(left),
                 || {
             */
-                    let mut res = do_the_work(left);
-                    filtered.append(&mut res);
-                   /* 
+            let mut res = do_the_work(left);
+            filtered.append(&mut res);
+            /*
                 },
             );
                    */

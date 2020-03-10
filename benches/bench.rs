@@ -2,7 +2,7 @@ use adaptive_work_stealing::{do_the_work, run, steal, work, NUM_THREADS};
 use criterion::Bencher;
 use criterion::BenchmarkGroup;
 use criterion::*;
-use rayon::prelude::*;
+use rayon_logs::prelude::*;
 #[macro_use]
 extern crate lazy_static;
 lazy_static! {
@@ -16,41 +16,61 @@ fn verify(numbers: Vec<&usize>) {
     assert_eq!(numbers.into_iter().sum::<usize>(), *VERIFY, "wrong output");
 }
 
-const WORK_SIZE: usize = 10_000;
+const WORK_SIZE: usize = 50_000;
 pub fn adaptive(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
-    for size in [1, 2, 4, 6, 8, 10, 15, 20].iter() {
+    let mut tasks: Vec<(usize, f64)> = Vec::new();
+    for size in 1..5 {
+        let mut num_tasks = (0, 0);
         group.bench_with_input(BenchmarkId::new("Adaptive", size), &size, |b, &size| {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(NUM_THREADS)
-                .steal_callback(move |x| steal(*size, x))
+            let pool = rayon_logs::ThreadPoolBuilder::new()
+                .num_threads(size)
+                .steal_callback(move |x| steal(8, x))
                 .build()
                 .unwrap();
 
             b.iter(|| {
-                pool.install(|| {
+                let (_, log) = pool.logging_install(|| {
                     let numbers = run(black_box(&NUMBERS));
                     verify(numbers);
-                })
+                });
+                num_tasks.0 += log.tasks_logs.len();
+                num_tasks.1 += 1;
             });
         });
+        let avg_tasks = num_tasks.0 as f64 / num_tasks.1 as f64;
+        println!("{} tasks", avg_tasks);
+        tasks.push((size, avg_tasks));
     }
+    println!("{:?}", tasks);
 }
 
-pub fn iterator(b: &mut Bencher) {
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(NUM_THREADS)
-        .build()
-        .unwrap();
+pub fn iterator(group: &mut BenchmarkGroup<criterion::measurement::WallTime>) {
+    let mut tasks: Vec<(usize, f64)> = Vec::new();
+    for size in 1..5 {
+        let mut num_tasks = (0, 0);
+        group.bench_with_input(BenchmarkId::new("Iterator", size), &size, |b, &size| {
+            let pool = rayon_logs::ThreadPoolBuilder::new()
+                .num_threads(size)
+                .build()
+                .unwrap();
 
-    b.iter(|| {
-        pool.install(|| {
-            let numbers: Vec<&usize> = black_box(&NUMBERS)
-                .par_iter()
-                .filter(|x| work(**x))
-                .collect();
-            verify(numbers);
+            b.iter(|| {
+                let (_, log) = pool.logging_install(|| {
+                    let numbers: Vec<&usize> = black_box(&NUMBERS)
+                        .par_iter()
+                        .filter(|x| work(**x))
+                        .collect();
+                    verify(numbers);
+                });
+                num_tasks.0 += log.tasks_logs.len();
+                num_tasks.1 += 1;
+            });
         });
-    });
+        let avg_tasks = num_tasks.0 as f64 / num_tasks.1 as f64;
+        println!("{} tasks", avg_tasks);
+        tasks.push((size, avg_tasks));
+    }
+    println!("{:?}", tasks);
 }
 pub fn single(b: &mut Bencher) {
     b.iter(|| {
@@ -92,22 +112,26 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("Work-Stealing");
     group.measurement_time(std::time::Duration::new(3, 0));
     group.warm_up_time(std::time::Duration::new(1, 0));
-    group.sample_size(50);
+    group.sample_size(10);
 
     /*
     group.bench_function("single", |mut b: &mut Bencher| {
         single(&mut b);
     });
     */
+    /*
     group.bench_function("iterator", |mut b: &mut Bencher| {
         iterator(&mut b);
     });
+    */
+    adaptive(&mut group);
+    iterator(&mut group);
 
+    /*
     group.bench_function("perfect split", |b| {
         perfect_split(b);
     });
-
-    adaptive(&mut group);
+    */
 
     group.finish();
 }
